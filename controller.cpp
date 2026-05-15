@@ -7,7 +7,6 @@
 // 9	BodyLength	Message integrity
 // 35	MsgType	Must be A for Logon
 // 10	CheckSum	Message integrity
-#pragma once
 
 #include "controller.h"
 

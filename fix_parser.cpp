@@ -1,5 +1,3 @@
-#pragma once
-
 #include <iostream>
 #include "fix_parser.h"
 
@@ -23,7 +21,7 @@ size_t Fix_Parser::calculateBodyLength(const std::string &fixMessage,
 
     size_t tag10Start = fixMessage.find(tag10Header, tag9End + 1);
     if (tag10Start == std::string::npos)
-        return 0;
+        tag10Start = fixMessage.size() - 1; // If tag 10 is not found, consider body until the end of the message
 
     // Body starts after delimiter of tag 9
     size_t bodyStart = tag9End + 1;
@@ -181,17 +179,30 @@ std::string Fix_Parser::parse_to_string(Fix_Message &msg)
     std::string str;
     for (auto x : msg.seq)
     {
-
+        if (10 == x)
+            continue;
         str.append(std::to_string(x));
         str.push_back('=');
-        if (x == 10)
-        {
-            str.append(std::to_string(calculate_checksum(str)));
-        }
-        else
-            str.append(msg.msg[x]);
+        str.append(msg.msg[x]);
         str.push_back('|');
     }
+    // let's fix tag 9
+    int actual_length = calculateBodyLength(str);
+    const std::string tag9Header = "|9=";
+    size_t tag9Start = str.find(tag9Header);
+    if (tag9Start != std::string::npos)
+    {
+        size_t tag9End = str.find('|', tag9Start + 1);
+        if (tag9End != std::string::npos)
+        {
+            str.replace(tag9Start + tag9Header.length(),
+                        tag9End - (tag9Start + tag9Header.length()),
+                        std::to_string(actual_length));
+        }
+    }
+    str.append("10=");
+    str.append(std::to_string(calculate_checksum(str)));
+    str.push_back('|');
     return str;
 }
 // 8=FIX.4.2|9=112|35=A|34=1|49=CLIENT1|52=20260513-13:45:00.000|56=SERVER1|98=0|108=30|10=185|

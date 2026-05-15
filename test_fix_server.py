@@ -51,9 +51,8 @@ def test_logon_message_response():
         response = test.client_socket.recv(1024).decode()
         response = response.strip()
         expected_response = "8=FIX.4.2|9=69|35=A|34=1|49=SERVER1|52=20260515-12:30:00.000|56=CLIENT1|98=0|108=30|10=215|"
-        # print(f"Received response: {response}")
-        # print(f"Expected response: {expected_response}")
-        assert response == expected_response
+
+        assert response == expected_response, f"Expected response to be '{expected_response}', but got '{response}'"
         print("Logon message response test passed.")
     finally:
         test.tearDown()

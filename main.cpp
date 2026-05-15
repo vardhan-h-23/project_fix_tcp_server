@@ -1,6 +1,4 @@
 // server.cpp
-#pragma once
-
 #include "tcp_server.h"
 
 int main()
