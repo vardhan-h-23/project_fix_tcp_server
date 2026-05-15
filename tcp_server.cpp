@@ -7,6 +7,7 @@ Fix_Parser fix_parser;
 controller ctrl;
 void tcp_connection::start()
 {
+    do_write("Welcome to the FIX Server\n");
     do_read();
 }
 
@@ -22,21 +23,23 @@ void tcp_connection::handle_reads(const boost::system::error_code &error,
 {
     if (!error)
     {
-        std::cout << "bytes transferred are=" << bytes_transferred << "\n";
-        // std::cout.write(data_,bytes_transferred);
-        // std::cout<<"\n";
-        std::optional<Fix_Message> pmsg = fix_parser.parse(data_);
-        if (pmsg == std::nullopt)
+        std::optional<Fix_Message> pmsg = fix_parser.parse(data_, bytes_transferred);
+        if (pmsg != std::nullopt &&
+            (client_id_ == std::nullopt || (pmsg->has_field(49) && pmsg->get_field(49) == client_id_.value())))
         {
-            do_write("Initial Fix Validation failed invalid tag 9 value\n");
+            if (client_id_ == std::nullopt && pmsg->has_field(49))
+            {
+                client_id_ = pmsg->get_field(49);
+            }
+            ctrl.OnMessageReceive(pmsg.value(), shared_from_this());
+        }
+        else
+        {
+            do_write("Initial Fix Validation failed\n");
             if (state_ == tcp_connection_state::Authenticating)
             {
                 close();
             }
-        }
-        else
-        {
-            ctrl.OnMessageReceive(pmsg.value(), shared_from_this());
         }
 
         do_read();
@@ -62,8 +65,10 @@ void tcp_connection::close()
     do_write("## getting disconnected ##\n");
     boost::system::error_code ec;
     state_ = tcp_connection_state::Closed;
-    // TBD
-    //  ctrl.active_connections.erase()
+    if (client_id_ != std::nullopt)
+    {
+        ctrl.active_connections.erase(client_id_.value());
+    }
     socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
     socket_.close(ec);
 }
@@ -86,6 +91,10 @@ void tcp_server::handle_accept(tcp_connection::pointer new_connection,
     if (!error)
     {
         new_connection->start();
+    }
+    else
+    {
+        std::cout << "new connection accept failed: " << error.message() << "\n";
     }
     start_accept();
 }

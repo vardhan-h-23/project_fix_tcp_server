@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 
 #include <boost/uuid/uuid.hpp>            // uuid class
 #include <boost/uuid/uuid_generators.hpp> // generators
@@ -18,7 +19,8 @@ struct controller
     void OnMessageReceive(Fix_Message &msg, tcp_connection::pointer conn);
     bool validate_logon(Fix_Message &msg);
     bool validate_nos(Fix_Message &msg);
-    std::unordered_map<std::string, int> active_connections;
+    int getChecksum(std::string &msg);
+    std::unordered_set<std::string> active_connections;
 
     std::string getFormattedTime()
     {

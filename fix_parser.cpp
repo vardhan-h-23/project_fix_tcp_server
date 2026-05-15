@@ -3,63 +3,153 @@
 #include <iostream>
 #include "fix_parser.h"
 
+size_t Fix_Parser::calculateBodyLength(const std::string &fixMessage,
+                                       char delimiter)
+{
+    // Find tag 9
+    const std::string tag9Header = "|9=";
+
+    size_t tag9Start = fixMessage.find(tag9Header);
+    if (tag9Start == std::string::npos)
+        return 0;
+
+    // Find end of tag 9 field
+    size_t tag9End = fixMessage.find(delimiter, tag9Start + 1);
+    if (tag9End == std::string::npos)
+        return 0;
+
+    // Find start of tag 10
+    const std::string tag10Header = "|10=";
+
+    size_t tag10Start = fixMessage.find(tag10Header, tag9End + 1);
+    if (tag10Start == std::string::npos)
+        return 0;
+
+    // Body starts after delimiter of tag 9
+    size_t bodyStart = tag9End + 1;
+
+    // Body ends right before tag 10
+    size_t bodyEnd = tag10Start + 1;
+
+    return (bodyEnd - bodyStart);
+}
+
 bool Fix_Parser::validateFixBodyLength(const std::string &fixMessage, char delimiter)
 {
-    // 1. Find the end of Tag 8 (BeginString)
-    std::string tag8Header = "8=";
-    size_t tag8Start = fixMessage.find(tag8Header);
-    if (tag8Start == std::string::npos)
+    const std::string tag9Header = "|9=";
+
+    size_t tag9Start = fixMessage.find(tag9Header);
+    if (tag9Start == std::string::npos)
         return false;
 
-    size_t tag8End = fixMessage.find(delimiter, tag8Start);
-    if (tag8End == std::string::npos)
-        return false;
-
-    // 2. Find and parse Tag 9 (BodyLength)
-    std::string tag9Header = "9=";
-    size_t tag9Start = fixMessage.find(tag9Header, tag8End + 1);
-    // Ensure Tag 9 immediately follows Tag 8
-    if (tag9Start != tag8End + 1)
-        return false;
-
-    size_t tag9End = fixMessage.find(delimiter, tag9Start);
+    size_t tag9End = fixMessage.find(delimiter, tag9Start + 1);
     if (tag9End == std::string::npos)
         return false;
 
-    // Extract the expected length value declared in the message
-    std::string lengthStr = fixMessage.substr(tag9Start + tag9Header.length(), tag9End - (tag9Start + tag9Header.length()));
+    std::string lengthStr =
+        fixMessage.substr(tag9Start + tag9Header.length(),
+                          tag9End - (tag9Start + tag9Header.length()));
+
     int expectedLength = 0;
+
     try
     {
         expectedLength = std::stoi(lengthStr);
     }
-    catch (...)
+    catch (const std::exception &e)
     {
-        return false; // Invalid integer format in Tag 9
-    }
-
-    // 3. Find the start of Tag 10 (Checksum) to define the boundary
-    std::string tag10Header = "10=";
-    size_t tag10Start = fixMessage.find(tag10Header, tag9End + 1);
-    if (tag10Start == std::string::npos)
         return false;
-
-    // 4. Calculate actual body length
-    // Body starts right after Tag 9's delimiter and ends right before Tag 10's '1'
-    size_t bodyStart = tag9End + 1;
-    size_t actualLength = tag10Start - bodyStart;
-    
+    }
+    size_t actualLength =
+        calculateBodyLength(fixMessage, delimiter);
     return (static_cast<int>(actualLength) == expectedLength);
 }
 
-std::optional<Fix_Message> Fix_Parser::parse(std::string str)
+bool Fix_Parser::validate_fix_message(std::string &msg)
 {
-    int i = 0;
-    if (!validateFixBodyLength(str))
+    if (msg.size() < 10 ||
+        msg.back() != '|' ||
+        msg.substr(0, 6) != "8=FIX.")
+    {
+        return false;
+    }
+
+    bool has8 = false;
+    bool has9 = false;
+    bool has35 = false;
+
+    size_t start = 0;
+
+    while (start < msg.size())
+    {
+        const size_t end = msg.find('|', start);
+
+        if (end == std::string_view::npos || end == start)
+            return false;
+
+        const size_t eq = msg.find('=', start);
+
+        if (eq == std::string_view::npos || eq >= end)
+            return false;
+
+        // tag validation
+        for (size_t i = start; i < eq; ++i)
+        {
+            if (!std::isdigit(static_cast<unsigned char>(msg[i])))
+                return false;
+        }
+
+        // empty value
+        if (eq + 1 == end)
+            return false;
+
+        // value validation
+        for (size_t i = eq + 1; i < end; ++i)
+        {
+            const unsigned char c = msg[i];
+
+            if (c < 32 || c > 126)
+                return false;
+        }
+
+        // required tags
+        const auto tag_len = eq - start;
+
+        if (tag_len == 1 && msg[start] == '8')
+            has8 = true;
+        else if (tag_len == 1 && msg[start] == '9')
+            has9 = true;
+        else if (tag_len == 2 && msg[start] == '3' && msg[start + 1] == '5')
+            has35 = true;
+
+        start = end + 1;
+    }
+
+    return has8 && has9 && has35;
+}
+
+std::optional<Fix_Message> Fix_Parser::parse(char *data, size_t length)
+{
+    std::string_view msg(data, length);
+    size_t pos = msg.find("|10=");
+    if (pos == std::string_view::npos)
+    {
+        return std::nullopt;
+    }
+    size_t end = msg.find("|", pos + 4);
+    if (end == std::string_view::npos)
+    {
+        return std::nullopt;
+    }
+    std::string str(msg.substr(0, end + 1));
+
+    if (!validate_fix_message(str) && !validateFixBodyLength(str))
     {
         return std::nullopt;
     }
     Fix_Message fmsg;
+    fmsg.fix_str = str;
+    int i = 0;
     while (i < str.length())
     {
         if (str[i] < '0' || str[i] > '9')
@@ -155,7 +245,16 @@ int Fix_Message::get_int(int tag)
     auto it = msg.find(tag);
     if (it != msg.end())
     {
-        return std::stoi(it->second);
+        int num = 0;
+        try
+        {
+            num = std::stoi(it->second);
+        }
+        catch (const std::exception &e)
+        {
+            throw std::runtime_error("this tag is not an integer");
+        }
+        return num;
     }
     else
     {

@@ -14,10 +14,7 @@
 Fix_Parser parser;
 void controller::OnMessageReceive(Fix_Message &msg, tcp_connection::pointer conn)
 {
-    for (auto x : msg.msg)
-    {
-        std::cout << x.first << " " << x.second << "\n";
-    }
+    std::cout << "Received message: " << msg.fix_str << "\n";
     if (!msg.has_field(35))
     {
         std::cout << "Invalid message * rquired tag not found\n";
@@ -35,6 +32,7 @@ void controller::OnMessageReceive(Fix_Message &msg, tcp_connection::pointer conn
                 conn->state_ = tcp_connection_state::Connected;
                 std::cout << "logon successful\n";
                 std::swap(msg.msg[49], msg.msg[56]);
+                active_connections.insert(msg.get_field(49));
                 conn->do_write(parser.parse_to_string(msg) + "\n");
             }
             else
@@ -47,8 +45,7 @@ void controller::OnMessageReceive(Fix_Message &msg, tcp_connection::pointer conn
         else
         {
             std::cout << "already authenticated\n";
-            // TBD what exactly we need to do
-            //  conn->close();
+            // continue the connection don't close it for now
         }
     }
     else if (type == "D")
@@ -57,6 +54,7 @@ void controller::OnMessageReceive(Fix_Message &msg, tcp_connection::pointer conn
         {
             conn->do_write("You are not authorised to send NOS\n");
             conn->close();
+            return;
         }
         // TBD
         if (!validate_nos(msg))
@@ -70,7 +68,15 @@ void controller::OnMessageReceive(Fix_Message &msg, tcp_connection::pointer conn
             boost::uuids::uuid uuid = boost::uuids::random_generator()();
             msg.seq.pop_back();
             msg.add_field(35, "8");
-            msg.add_field(34, std::to_string(msg.get_int(34)+1));
+            try
+            {
+                msg.add_field(34, std::to_string(msg.get_int(34) + 1));
+            }
+            catch (const std::exception &e)
+            {
+                std::cerr << "MsgSeqNum is not present or not an integer, setting it to 1\n";
+                msg.add_field(34, "1");
+            }
             msg.add_field(37, boost::uuids::to_string(uuid));
             msg.seq.push_back(37);
             msg.add_field(39, "2");
@@ -81,7 +87,6 @@ void controller::OnMessageReceive(Fix_Message &msg, tcp_connection::pointer conn
             msg.seq.push_back(14);
             std::swap(msg.msg[49], msg.msg[56]);
             msg.add_field(60, getFormattedTime());
-            msg.seq.push_back(60);
             msg.seq.push_back(10);
             msg.add_field(52, getFormattedTime());
             conn->do_write(parser.parse_to_string(msg) + "\n");
@@ -89,29 +94,63 @@ void controller::OnMessageReceive(Fix_Message &msg, tcp_connection::pointer conn
     }
     else
     {
+        std::cout << "unsupported message type\n";
+        conn->do_write("unsupported message type\n");
     }
 }
 
 bool controller::validate_logon(Fix_Message &msg)
 {
+    // std::cout << "Hthis1\n";
     if (!msg.has_field(8) || msg.get_field(8) != "FIX.4.2")
     {
         return false;
     }
-    // TBD is client validation etc.. now allowing all the connections
-    if (!msg.has_field(49))
+    // std::cout << "Hthis2\n";
+    // TBD is client validation etc.. now rejecting all the duplicate logins for simplicity
+    if (!msg.has_field(49) || active_connections.find(msg.get_field(49)) != active_connections.end())
     {
         return false;
     }
-    // checksum is diff
-    // active_connections[msg.msg[49]]++;
-    // if (!msg.has_field(34) || msg.get_int(34) != active_connections[msg.msg[49]])
-    // {
-    //     return false;
-    // }
+    // std::cout << "Hthis3\n";
+    int expected_checksum = getChecksum(msg.fix_str);
+    int real_checksum = 0;
+    try
+    {
+        real_checksum = msg.get_int(10);
+    }
+    catch (const std::exception &e)
+    {
+        // std::cerr << "Checksum tag (10) is not present or not an integer.\n";
+        return false;
+    }
+
+    // std::cout << "Expected checksum: " << expected_checksum << "\n";
+    // std::cout << "Real checksum: " << real_checksum << "\n";
+    if (!msg.has_field(10) || real_checksum != expected_checksum)
+    {
+        return false;
+    }
     return true;
 }
+int controller::getChecksum(std::string &msg)
+{
+    // Calculate checksum as the sum of all bytes before the checksum tag 10, modulo 256
+    int checksum = 0;
+    int pos_10 = msg.find("|10=");
+    if (pos_10 == std::string::npos)
+    {
+        std::cerr << "Checksum tag (10) not found in the message.\n";
+        return 0;
+    }
+    for (size_t i = 0; i < pos_10; ++i)
+    {
+        checksum += static_cast<int>(msg[i]);
+    }
+    checksum %= 256;
 
+    return checksum;
+}
 bool controller::validate_nos(Fix_Message &msg)
 {
     return true;

@@ -41,11 +41,12 @@ private:
         : socket_(io_context), state_(tcp_connection_state::Authenticating)
     {
     }
-    
+
     void handle_write(const boost::system::error_code & /*error*/, size_t /*bytes_transferred*/) {}
     void do_read();
     void handle_reads(const boost::system::error_code &error,
                       size_t bytes_transferred);
+    std::optional<std::string> client_id_ = std::nullopt;
     tcp::socket socket_;
     char data_[10240];
 };
