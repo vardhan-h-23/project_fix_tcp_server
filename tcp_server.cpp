@@ -9,11 +9,12 @@ void tcp_connection::start()
     do_read();
 }
 
-void tcp_connection::do_read()
+void tcp_connection::do_read(int from_index)
 {
     auto self = shared_from_this();
-    socket_.async_read_some(boost::asio::buffer(data_, 10240), [self](const boost::system::error_code &error, size_t bytes_transferred)
-                            { self->handle_reads(error, bytes_transferred); });
+    curr_loc = 0;
+    socket_.async_read_some(boost::asio::buffer(read_buffer_.data()+from_index, 10240), [self, from_index](const boost::system::error_code &error, size_t bytes_transferred)
+                            { self->handle_reads(error, bytes_transferred+from_index); });
 }
 
 void tcp_connection::handle_reads(const boost::system::error_code &error,
@@ -21,25 +22,46 @@ void tcp_connection::handle_reads(const boost::system::error_code &error,
 {
     if (!error)
     {
-        std::optional<Fix_Message> pmsg = fix_parser.parse(data_, bytes_transferred);
-        if (pmsg != std::nullopt &&
-            (client_id_ == std::nullopt || (pmsg->has_field(49) && pmsg->get_field(49) == client_id_.value())))
+        int last_traversed = 0;
+        while(curr_loc < (bytes_transferred-1))
         {
-            if (client_id_ == std::nullopt && pmsg->has_field(49))
+            Parse_Result result = fix_parser.parse(read_buffer_, curr_loc, last_traversed, bytes_transferred);
+            // std::cout << "Parsed message: " << (result.msg.has_value() ? result.msg->fix_str : "No valid message parsed") << "\n"
+            //           << "Is valid: " << result.is_valid << ", Is half message: " << result.is_half_message << "\n";
+            if (result.is_valid &&
+                (client_id_ == std::nullopt || (result.msg->has_field(49) && result.msg->get_field(49) == client_id_.value())))
             {
-                client_id_ = pmsg->get_field(49);
+                if (client_id_ == std::nullopt && result.msg->has_field(49))
+                {
+                    client_id_ = result.msg->get_field(49);
+                }
+                ctrl.OnMessageReceive(result.msg.value(), shared_from_this());
+                curr_loc += last_traversed;
             }
-            ctrl.OnMessageReceive(pmsg.value(), shared_from_this());
-        }
-        else
-        {
-            do_write("Initial Fix Validation failed\n");
-            if (state_ == tcp_connection_state::Authenticating)
+            else if (result.is_half_message)
             {
-                close();
+                // Handle half message case
+                std::string remaining_data(read_buffer_.data() + curr_loc, last_traversed);
+                if (read_buffer_.size() < (last_traversed + 10240))
+                {
+                    read_buffer_.resize(last_traversed + 10240,'\0');
+                }
+                std::copy(remaining_data.begin(), remaining_data.end(), read_buffer_.begin());
+                // std::cout << "Received half message msg=" << read_buffer_.substr(0, last_traversed) << ", waiting for the rest...\n";
+                do_read(last_traversed);
+                return;
             }
+            else
+            {
+                do_write("Initial Fix Validation failed\n");
+                curr_loc += last_traversed;
+                if (state_ == tcp_connection_state::Authenticating)
+                {
+                    close();
+                }
+            }
+            std::cout << "Current location in buffer: " << curr_loc << " out of " << bytes_transferred << "\n";
         }
-
         do_read();
     }
     else
@@ -79,7 +101,7 @@ void tcp_server::start_accept()
     acceptor_.async_accept(new_connection->socket(),
                            [this, new_connection](const boost::system::error_code &error)
                            {
-                               this->handle_accept(new_connection, error);
+                               handle_accept(new_connection, error);
                            });
 }
 

@@ -126,40 +126,84 @@ bool Fix_Parser::validate_fix_message(std::string &msg)
     return has8 && has9 && has35;
 }
 
-std::optional<Fix_Message> Fix_Parser::parse(char *data, size_t length)
+Parse_Result Fix_Parser::parse(std::string& data, int& curr_loc, int  &traversed, size_t length)
 {
-    std::string_view msg(data, length);
-    size_t pos = msg.find("|10=");
+    // Start from the curr_loc of the data like data.data() index
+    // start with |8...|10=| 
+    // just after |8 we have |9=body_length so validate the body_length
+    // |10=check_sum we need to check the checksum from |8 to the ..)|10=
+    // check for the duplicates while adding the values 
+    // need to separately handle the Fix use cases
+    // case 1 (normal): 8=FIX.4.2|9=112|35=A|34=1|49=CLIENT1|52=20260513-13:45:00.000|56=SERVER1|98=0|108=30|10=185|
+    // case 2 (multiple messages in the same data): 8=FIX.4.2|9=112|35=A|34=1|49=CLIENT1|52=20260513-13:45:00.000|56=SERVER1|98=0|108=30|10=185|8=FIX.4.2|9=112|35=A|34=1|49=CLIENT1|52=20260513-13:45:00.000|56=SERVER1|98=0|108=30|10=185|
+    // case 3 (half messages in the middle of the data 1st incomplete and 2nd complete): 8=FIX.4.2|9=112|35=A|34=1|49=CLIENT1|52=20260513-13:45:00.000|56=SERVER1|98=0|108=30|8=FIX.4.2|9=112|35=A|34=1|49=CLIENT1|52=20260513-13:45:00.000|56=SERVER1|98=0|108=30|10=185|
+    // case 4 :(half message in the end)-> we need to wait for the next data to come and then we can parse the complete message
+    // case 5 duplicate tags in the message -> we can't parse the message and we can discard the message as it is not valid
+
+    // we first decide which is incomplete and which is complete message
+    // if |8= represent the start of new message if it present twice before the next |10= then can conclude 
+    // the first message is incomplete and the second message is complete and we can parse the second 
+    //message and keep the first message in the buffer for the next data to come and then we can parse the 
+    // first message
+    // if |8= is present only once before the next |10= then we can conclude that the message is complete
+    // if |8= is present only once and there is no |10= then we can conclude that the message is incomplete 
+    // and we can keep the message in the buffer for the next data to come and then we can parse the message
+    // Let's return the status of the message is half message in the end waiting for the next data to come 
+    std::string_view str(data.data() + curr_loc, length - curr_loc);
+    size_t start = str.find("8=FIX.");
+    if (start == std::string_view::npos)
+    {   
+        traversed = str.size(); // move the curr_loc to the end of the data as 
+        return Parse_Result{false, false, std::nullopt};
+    }
+    size_t pos = str.find("|10=", start);
     if (pos == std::string_view::npos)
     {
-        return std::nullopt;
+        traversed = str.size();
+        return Parse_Result{false, true, std::nullopt};
     }
-    size_t end = msg.find("|", pos + 4);
+    size_t end = str.find('|', pos + 1);
     if (end == std::string_view::npos)
     {
-        return std::nullopt;
+        traversed = str.size();
+        return Parse_Result{false, true, std::nullopt};
     }
-    std::string str(msg.substr(0, end + 1));
-
-    if (!validate_fix_message(str) && !validateFixBodyLength(str))
+    end ++;
+    size_t tmp = start+6; // move past "8=FIX."
+    while (tmp < end)
     {
-        return std::nullopt;
+        tmp = str.find("8=FIX.", tmp);
+        if (tmp == std::string_view::npos || tmp >= end)
+            break;
+        start = tmp; // move the start to the new |8= position
+        tmp += 6; // move past "8=FIX."
+    }
+    traversed = end;
+    std::string msg_string(str.substr(start, end-start));
+    std::cout << "Extracted message string: " << msg_string << "\n";
+    if (!validate_fix_message(msg_string) && !validateFixBodyLength(msg_string))
+    {
+        return Parse_Result{false, false, std::nullopt};
     }
     Fix_Message fmsg;
-    fmsg.fix_str = str;
+    fmsg.fix_str = msg_string;
     int i = 0;
-    while (i < str.length())
+    while (i < msg_string.length())
     {
-        if (str[i] < '0' || str[i] > '9')
+        if (msg_string[i] < '0' || msg_string[i] > '9')
         {
             i++;
             continue;
         }
-        auto nxt = find_next(str, i);
+        auto nxt = find_next(msg_string, i);
         fmsg.seq.push_back(nxt.first);
-        fmsg.add_field(nxt.first, nxt.second);
+        if (fmsg.add_field(nxt.first, nxt.second))
+        {
+            // duplicate tag found, invalid message
+            return Parse_Result{false, false, std::nullopt};
+        }
     }
-    return fmsg;
+    return Parse_Result{true, false, fmsg};
 }
 
 int Fix_Parser::calculate_checksum(const std::string &fix_msg)
@@ -229,9 +273,17 @@ std::pair<int, std::string> Fix_Parser::find_next(std::string &s, int &i)
     return std::make_pair(tag, val);
 }
 
-void Fix_Message::add_field(int tag, std::string val)
+bool Fix_Message::add_field(int tag, std::string val)
 {
-    msg[tag] = val;
+    if (msg.find(tag)==msg.end())
+    {
+        msg[tag] = val;
+        return false;
+    }
+    else
+    {
+        return true;
+    }
 }
 
 bool Fix_Message::has_field(int tag)

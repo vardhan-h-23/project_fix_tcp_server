@@ -138,24 +138,24 @@ def rejection_scenario2():
     finally:
         test.tearDown()
 
-def rejection_scenario3():
-    test = TestFixServer()
+# def rejection_scenario3():
+#     test = TestFixServer()
 
-    test.setUp()
+#     test.setUp()
 
-    try:
-        # just put the pipe in the start of the message to make it invalid and also checksum is wrong in the below message
-        invalid_logon_message = "|8=FIX.4.2|9=69|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000|56=SERVER1|98=0|108=30|10=189|"
-        test.client_socket.sendall(invalid_logon_message.encode())
-        response = test.client_socket.recv(1024).decode()
-        response = response.strip()
-        expected_response = "logon validation failed"
-        assert response.startswith(expected_response), f"Expected response to be '{expected_response}', but got '{response}'"
+#     try:
+#         # just put the pipe in the start of the message to make it invalid and also checksum is wrong in the below message
+#         invalid_logon_message = "|8=FIX.4.2|9=69|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000|56=SERVER1|98=0|108=30|10=189|"
+#         test.client_socket.sendall(invalid_logon_message.encode())
+#         response = test.client_socket.recv(1024).decode()
+#         response = response.strip()
+#         expected_response = "logon validation failed"
+#         assert response.startswith(expected_response), f"Expected response to be '{expected_response}', but got '{response}'"
 
-        print("Rejection scenario3 test passed.")
+#         print("Rejection scenario3 test passed.")
 
-    finally:
-        test.tearDown()
+#     finally:
+#         test.tearDown()
 
 def rejection_scenario4():
     test = TestFixServer()
@@ -163,7 +163,7 @@ def rejection_scenario4():
     test.setUp()
 
     try:
-                # put invalid length in the logon message
+        # put invalid length in the logon message
         invalid_logon_message = "8=FIX.4.2|9=67|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000|56=SERVER1|98=0|108=30|10=188|"
         test.client_socket.sendall(invalid_logon_message.encode())
         response = test.client_socket.recv(1024).decode()
@@ -193,11 +193,192 @@ def rejection_scenario5():
     finally:
         test.tearDown()
 
+
+def continuous_parsing_test1():
+    test = TestFixServer()
+    
+    test.setUp()
+
+    try:
+        # send two logon messages back to back without waiting for response to test the continuous parsing and also the second message is invalid with wrong checksum
+        logon_message1 = "8=FIX.4.2|9=69|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000|56=SERVER1|98=0|108=30|10=189|"
+        logon_message2 = "8=FIX.4.2|9=69|35=A|34=1|49=CLIENT2|52=20260515-12:31:00.000|56=SERVER1|98=0|108=30|10=188|" # invalid message with wrong checksum
+        combined_message = logon_message1 + logon_message2
+        test.client_socket.sendall(combined_message.encode())
+
+        response1 = test.client_socket.recv(1024).decode()
+        response1 = response1.strip()
+        expected_response1 = "8=FIX.4.2|9=69|35=A|34=1|49=SERVER1|52=20260515-12:30:00.000|56=CLIENT1|98=0|108=30|10=215|" 
+        assert response1 == expected_response1, f"Expected response to be '{expected_response1}', but got '{response1}'"
+
+        response2 = test.client_socket.recv(1024).decode()
+        response2 = response2.strip()
+        # print(f"Received response for second message: {response2}")
+        expected_response2 = "Initial Fix Validation failed"
+        assert response2.startswith(expected_response2), f"Expected response to be '{expected_response2}', but got '{response2}'"
+
+        print("Continuous parsing test passed.")
+
+    finally:
+        test.tearDown()
+
+def continuous_parsing_test2():
+    test = TestFixServer()
+    
+    test.setUp()
+
+    try:
+        # send a valid logon message followed by an valid NoS message without waiting for response to test the continuous parsing and also the second message is invalid with wrong checksum
+        logon_message = "8=FIX.4.2|9=69|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000|56=SERVER1|98=0|108=30|10=189|"
+        nos_fix_message = "8=FIX.4.2|9=138|35=D|34=2|49=CLIENT1|52=20260515-12:35:00.000|56=SERVER1|11=ORD0001|21=1|38=100|40=2|44=245.50|54=1|55=AAPL|59=0|60=20260515-12:35:00.000|10=234|"
+        combined_message = logon_message + nos_fix_message
+        test.client_socket.sendall(combined_message.encode())
+        response1 = test.client_socket.recv(1024).decode()
+        response1 = response1.strip()
+        expected_response1 = "8=FIX.4.2|9=69|35=A|34=1|49=SERVER1|52=20260515-12:30:00.000|56=CLIENT1|98=0|108=30|10=215|" 
+        assert response1 == expected_response1, f"Expected response to be '{expected_response1}', but got '{response1}'"
+
+        response2 = test.client_socket.recv(1024).decode()
+        response2 = response2.strip()
+        # print(f"Received response for NoS message: {response2}")
+        tags_to_match = {"39": "2", "151": "0", "14": "100"}
+        response_tags_to_value_map = {}
+        for tag in response2.split('|'):
+            if '=' in tag:
+                key, value = tag.split('=')
+                response_tags_to_value_map[key] = value
+        for tag, expected_value in tags_to_match.items():
+            assert response_tags_to_value_map.get(tag) == expected_value, f"Expected tag {tag} to have value {expected_value}, but got {response_tags_to_value_map.get(tag)}"
+
+        print("Continuous parsing test 2 passed.")
+    finally:
+        test.tearDown()
+
+
+def continuous_parsing_test3():
+    # let's test the half Fix message scenario where the first message is sent in two parts to test the continuous parsing and also the second message is valid
+    test = TestFixServer()
+
+    test.setUp()
+
+    try:
+        half_logon_msg = "8=FIX.4.2|9=69|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000"
+        remaining_logon_msg = "|56=SERVER1|98=0|108=30|10=189|"
+        test.client_socket.sendall(half_logon_msg.encode())
+        test.client_socket.sendall(remaining_logon_msg.encode())
+        response1 = test.client_socket.recv(1024).decode()
+        response1 = response1.strip()
+        expected_response1 = "8=FIX.4.2|9=69|35=A|34=1|49=SERVER1|52=20260515-12:30:00.000|56=CLIENT1|98=0|108=30|10=215|" 
+        assert response1 == expected_response1, f"Expected response to be '{expected_response1}', but got '{response1}'"
+
+        print("Continuous parsing test 3 passed.")
+    finally:
+        test.tearDown()
+
+
+def continuous_parsing_test4():
+    # let's test the scenario where multiple messages are sent in parts to test the continuous parsing and also the second message is valid
+    test = TestFixServer()
+
+    test.setUp()
+
+    try:
+        logon_message = "8=FIX.4.2|9=69|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000|56=SERVER1|98=0|108=30|10=189|"
+        half_nos_msg = "8=FIX.4.2|9=138|35=D|34=2|49=CLIENT1|52=20260515-12:35:00.000|56=SERVER1|11=ORD0001"
+        remaining_nos_msg = "|21=1|38=100|40=2|44=245.50|54=1|55=AAPL|59=0|60=20260515-12:35:00.000|10=234|"
+        combined_message = logon_message + half_nos_msg
+        test.client_socket.sendall(combined_message.encode())
+        response1 = test.client_socket.recv(1024).decode()
+        response1 = response1.strip()
+        expected_response1 = "8=FIX.4.2|9=69|35=A|34=1|49=SERVER1|52=20260515-12:30:00.000|56=CLIENT1|98=0|108=30|10=215|" 
+        assert response1 == expected_response1, f"Expected response to be '{expected_response1}', but got '{response1}'"
+
+        test.client_socket.sendall(remaining_nos_msg.encode())
+        response2 = test.client_socket.recv(1024).decode()
+        response2 = response2.strip()
+        # print(f"Received response for NoS message: {response2}")
+        tags_to_match = {"39": "2", "151": "0", "14": "100"}
+        response_tags_to_value_map = {}
+        for tag in response2.split('|'):
+            if '=' in tag:
+                key, value = tag.split('=')
+                response_tags_to_value_map[key] = value
+        for tag, expected_value in tags_to_match.items():
+            assert response_tags_to_value_map.get(tag) == expected_value, f"Expected tag {tag} to have value {expected_value}, but got {response_tags_to_value_map.get(tag)}"
+
+        print("Continuous parsing test 4 passed.")
+    finally:
+        test.tearDown()
+
+
+def continuous_parsing_test5():
+    # let's test the scenario where multiple messages are sent in parts to test the continuous parsing and also the second message is invalid with wrong checksum
+    test = TestFixServer()
+
+    test.setUp()
+
+    try:
+        logon_message = "8=FIX.4.2|9=69|35=A|34=1|8=FIX.4.2|9=69|8=FIX.4.2|9=69|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000|56=SERVER1|98=0|108=30|10=189|"
+        test.client_socket.sendall(logon_message.encode())
+        response1 = test.client_socket.recv(1024).decode()
+        response1 = response1.strip()
+        expected_response1 = "8=FIX.4.2|9=69|35=A|34=1|49=SERVER1|52=20260515-12:30:00.000|56=CLIENT1|98=0|108=30|10=215|"
+        assert response1 == expected_response1, f"Expected response to be '{expected_response1}', but got '{response1}'"
+        print("Continuous parsing test 5 passed.")
+    finally:
+        test.tearDown()
+
+def continuous_parsing_test6():
+    # let's test the scenario where multiple messages are sent in parts to test the continuous parsing and also the second message is invalid with wrong checksum
+    test = TestFixServer()
+
+    test.setUp()
+
+    try:
+        logon_message = "8=FIX.4.2|9=69|35=A|34=1|49=CLIENT1|52=20260515-12:30:00.000|56=SERVER1|98=0|108=30|10=189|"
+        nos_fix_msg1 = "8=FIX.4.2|9=138|35=D|34=2|49=CLIENT1|52=20260515-12:35:00.000|56=SERVER1|11=ORD0001|21=1|38=100|38=100|40=2|44=245.50|54=1|55=AAPL|59=0|60=20260515-12:35:00.000|10=234|"
+        nos_fix_msg2 = "8=FIX.4.2|9=138|35=D|34=3|49=CLIENT1|52=20260515-12:35:00.000|56=SERVER1|11=ORD0001|21=1|38=100|40=2|44=245.50|54=1|55=AAPL|59=0|60=20260515-12:35:00.000|10=234|"
+        combined_message = logon_message + nos_fix_msg1 + nos_fix_msg2
+        test.client_socket.sendall(combined_message.encode())
+        response1 = test.client_socket.recv(1024).decode()
+        response1 = response1.strip()
+        expected_response1 = "8=FIX.4.2|9=69|35=A|34=1|49=SERVER1|52=20260515-12:30:00.000|56=CLIENT1|98=0|108=30|10=215|"
+        assert response1 == expected_response1, f"Expected response to be '{expected_response1}', but got '{response1}'"
+        # print(f"Received response for first message: {response1}")
+        response2 = test.client_socket.recv(1024).decode()
+        response2 = response2.strip()
+        expected_response2 = "Initial Fix Validation failed"
+        # print(f"Received response for second message: {response2}")
+        assert response2.startswith(expected_response2), f"Expected response to be '{expected_response2}', but got '{response2}'"
+        # response3 = test.client_socket.recv(1024).decode()
+        # response3 = response3.strip()
+        # print(f"Received response for third message: {response3}")
+        tags_to_match = {"39": "2", "151": "0", "14": "100"}
+        response_tags_to_value_map = {}
+        for tag in response2.split('|'):
+            if '=' in tag:
+                key, value = tag.split('=')
+                response_tags_to_value_map[key] = value
+        for tag, expected_value in tags_to_match.items():
+            assert response_tags_to_value_map.get(tag) == expected_value, f"Expected tag {tag} to have value {expected_value}, but got {response_tags_to_value_map.get(tag)}"
+        print("Continuous parsing test 6 passed.")
+
+
+    finally:
+        test.tearDown()
+
+
 if __name__ == '__main__':
     test_logon_message_response()
     test_nos_message_response()
     rejection_scenario1()
     rejection_scenario2()
-    rejection_scenario3()
+    # # rejection_scenario3() // it no loger is valid because the next fix message will start from 8=FIX...
     rejection_scenario4()
     rejection_scenario5()
+    continuous_parsing_test1()
+    continuous_parsing_test2()
+    continuous_parsing_test3()
+    continuous_parsing_test4()
+    continuous_parsing_test5()
+    continuous_parsing_test6()

@@ -40,15 +40,17 @@ private:
     tcp_connection(boost::asio::io_context &io_context)
         : socket_(io_context), state_(tcp_connection_state::Authenticating)
     {
+        read_buffer_.resize(10240); // Initial buffer size
     }
 
     void handle_write(const boost::system::error_code & /*error*/, size_t /*bytes_transferred*/) {}
-    void do_read();
+    void do_read(int from_index=0);
     void handle_reads(const boost::system::error_code &error,
                       size_t bytes_transferred);
     std::optional<std::string> client_id_ = std::nullopt;
     tcp::socket socket_;
-    char data_[10240];
+    std::string read_buffer_;
+    int curr_loc = 0;
 };
 
 class tcp_server
